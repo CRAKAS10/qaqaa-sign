@@ -102,9 +102,21 @@ var START_FILE = '<?= fileId ?>';
 var S = { people: [], signs: {}, count: 0, files: [], fs: {}, fcount: 0, cur: 'u', admin: false, appUrl: '' }, target = null, strokes = [], stroke = null, locked = false;
 var $ = function (id) { return document.getElementById(id); };
 // عند استضافة هذه الصفحة على موقعك (مثل نطاق فرعي من qaqasa.com) ضع هنا رابط تطبيق الويب من Apps Script (ينتهي بـ /exec):
-var API_URL = '';
+var API_URL = 'https://script.google.com/macros/s/AKfycbx1-Z2j0ERFAaYC-TFhfeoeRwhq867lCj8Tr37BgMWQ5GLokMRkFzi3bYSxctvaEKdE/exec';
+var API_URLS = [];   // روابط مرشحة (يُعتمد أول رابط يستجيب)
 var LIVE = (typeof google !== 'undefined') && google.script && google.script.run;
-var HOSTED = !LIVE && /^https:\/\/script\.google\.com\//.test(API_URL);
+if (/^https:\/\/script\.google\.com\//.test(API_URL)) API_URLS = [API_URL];
+var HOSTED = !LIVE && API_URLS.length > 0, apiReady = null;
+function resolveApi() {
+  return apiReady || (apiReady = new Promise(function (res, rej) {
+    (function next(i) {
+      if (i >= API_URLS.length) return rej(new Error('تعذّر الاتصال بجدول التوقيعات، تحقق من الإنترنت ثم أعد فتح الصفحة.'));
+      fetch(API_URLS[i], { method: 'POST', body: JSON.stringify({ fn: 'getSince', args: [0, 0] }), redirect: 'follow' })
+        .then(function (r) { return r.json(); }).then(function (o) { if (o && typeof o.ok === 'boolean') { API_URL = API_URLS[i]; res(); } else next(i + 1); })
+        .catch(function () { next(i + 1); });
+    })(0);
+  }));
+}
 if (ADMIN_KEY.charAt(0) === '<') ADMIN_KEY = LIVE ? '' : (HOSTED ? ((/[?&]admin=([^&#]+)/.exec(location.search) || [])[1] || '') : 'local');
 if (START_FILE.charAt(0) === '<') START_FILE = LIVE ? '' : ((/[?&]f=([^&#]+)/.exec(location.search) || [])[1] || '');
 var CDN = 'https://cdnjs.cloudflare.com/ajax/libs/';
@@ -139,9 +151,9 @@ var Local = {
 };
 function run(fn, args, ok, fail) {
   if (LIVE) { var r = google.script.run.withSuccessHandler(ok).withFailureHandler(function (e) { (fail || function () {})(e && e.message ? e.message : String(e)); }); r[fn].apply(r, args); return; }
-  if (HOSTED) { fetch(API_URL, { method: 'POST', body: JSON.stringify({ fn: fn, args: args }), redirect: 'follow' })
+  if (HOSTED) { resolveApi().then(function () { return fetch(API_URL, { method: 'POST', body: JSON.stringify({ fn: fn, args: args }), redirect: 'follow' }); })
       .then(function (r) { return r.json(); }).then(function (o) { if (o && o.ok) ok(o.data); else (fail || function () {})((o && o.error) || 'تعذّر تنفيذ الطلب.'); })
-      .catch(function () { (fail || function () {})('تعذّر الاتصال بالخادم، تحقق من الإنترنت ثم أعد المحاولة.'); }); return; }
+      .catch(function (e) { apiReady = API_URL ? apiReady : null; (fail || function () {})(e && /جدول التوقيعات/.test(e.message || '') ? e.message : 'تعذّر الاتصال بالخادم، تحقق من الإنترنت ثم أعد المحاولة.'); }); return; }
   Local[fn].apply(null, args).then(ok).catch(function (e) { (fail || function () {})(e && e.message ? e.message : String(e)); });
 }
 /* ===== كشف مواضع التوقيع في ملفات PDF ونسخ التوقيعات إليها ===== */
