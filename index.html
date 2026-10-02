@@ -99,7 +99,7 @@ details ol{padding-right:18px;margin-top:4px;color:var(--mute);line-height:1.6}
 <script>
 var ADMIN_KEY = '<?= adminKey ?>';
 var START_FILE = '<?= fileId ?>';
-var S = { people: [], signs: {}, count: 0, files: [], fs: {}, fcount: 0, cur: 'u', admin: false, appUrl: '' }, target = null, strokes = [], stroke = null, locked = false;
+var S = { people: [], signs: {}, count: 0, files: [], fs: {}, fcount: 0, cur: 'u', admin: false, appUrl: '', ready: false }, target = null, strokes = [], stroke = null, locked = false;
 var $ = function (id) { return document.getElementById(id); };
 // عند استضافة هذه الصفحة على موقعك (مثل نطاق فرعي من qaqasa.com) ضع هنا رابط تطبيق الويب من Apps Script (ينتهي بـ /exec):
 var API_URL = 'https://script.google.com/macros/s/AKfycbx1-Z2j0ERFAaYC-TFhfeoeRwhq867lCj8Tr37BgMWQ5GLokMRkFzi3bYSxctvaEKdE/exec';
@@ -108,6 +108,7 @@ var LIVE = (typeof google !== 'undefined') && google.script && google.script.run
 if (/^https:\/\/script\.google\.com\//.test(API_URL)) API_URLS = [API_URL];
 var HOSTED = !LIVE && API_URLS.length > 0, apiReady = null;
 function resolveApi() {
+  if (!apiReady && API_URLS.length === 1) { API_URL = API_URLS[0]; apiReady = Promise.resolve(); }
   return apiReady || (apiReady = new Promise(function (res, rej) {
     (function next(i) {
       if (i >= API_URLS.length) return rej(new Error('تعذّر الاتصال بجدول التوقيعات، تحقق من الإنترنت ثم أعد فتح الصفحة.'));
@@ -162,6 +163,7 @@ function normAr(s) {
   s = s.replace(/هللا/g, 'الله').replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/اال/g, 'الا');
   return s.replace(/[^\u0621-\u064A0-9A-Za-z ]/g, ' ').replace(/\s+/g, ' ').trim();
 }
+var TITLES = { 'د': 1, 'ا': 1, 'أ': 1, 'الاستاذ': 1, 'الدكتور': 1, 'المعلم': 1, 'م': 1 };
 function nameTokens(s) { return normAr(s).split(' ').filter(function (t) { return t && t !== 'بن'; }); }
 /* هل نص الخانة اسمٌ لهذا الشخص؟ (الاسم الأول والأخير مطابقان وما بينهما من اسمه بالترتيب) */
 function matchName(cellTok, fullTok) {
@@ -191,7 +193,7 @@ function pageCells(items) {
     s.text = t; s.yTop = s.y + s.h; s.yBot = s.y;
   });
   /* دمج سطرين متتاليين في الخانة نفسها (اسم ملتف على سطرين) */
-  var cells = segs.map(function (s) { return { x0: s.x0, x1: s.x1, yTop: s.yTop, yBot: s.yBot, h: s.h, text: s.text, lines: 1 }; });
+  var cells = segs.map(function (s) { return { x0: s.x0, x1: s.x1, yTop: s.yTop, yBot: s.yBot, h: s.h, text: s.text, lines: 1, parts: s.parts }; });
   segs.forEach(function (a) {
     segs.forEach(function (b) {
       if (a === b || b.y >= a.y) return; var dy = a.y - b.y; if (dy > a.h * 1.75) return;
@@ -202,34 +204,80 @@ function pageCells(items) {
   cells.forEach(function (c) { c.n = normAr(c.text); c.cx = (c.x0 + c.x1) / 2; c.cy = (c.yTop + c.yBot) / 2; });
   return cells;
 }
-var NAME_HDR = /^(الاسم|اسم المعلم|المعلم الزائر|المعلم المنفذ|اسم المنسوب|معلمو القسم|اسم الموظف)$/, NOT_NAME_HDR = /^(يزور|المعلم المزور|المعلم المزار)/;
-function detectPage(items, people) {
+var NAME_HDR = /(^| )(الاسم|اسم)( |$)|^(المعلم|المعلم الزائر|المعلم المنفذ|المنفذ|معلمو القسم|المعلمون|العضو|الاعضاء|اعضاء الفريق|المكلف|المعلم المكلف|الموظف|المنسوب)$/, NOT_NAME_HDR = /^(يزور|المعلم المزور|المعلم المزار|اسم الطالب|اسم المدرسه|اسم البرنامج|اسم المؤسسه|اسم الشريك)/;
+/* منطقة السطر المنقّط في عبارة «التوقيع: ........» (يسار العبارة) */
+function dotsRegion(c) {
+  var ps = (c.parts || []).slice().sort(function (a, b) { return a.x0 - b.x0; }), k = 0;
+  while (k < ps.length && /^[.\u2026\u00b7_:\-\s]+$/.test(ps[k].t)) k++;
+  if (k > 0 && ps[k - 1].x1 - ps[0].x0 >= 18) return [ps[0].x0, ps[k - 1].x1];
+  return [c.x0 - 56, c.x0 - 6];
+}
+function overlaps(b, imgs) { return (imgs || []).some(function (m) { return Math.min(b.x + b.w, m[2]) - Math.max(b.x, m[0]) > 4 && Math.min(b.y + b.h, m[3]) - Math.max(b.y, m[1]) > 3; }); }
+function detectPage(items, people, imgs) {
   var cells = pageCells(items), out = [];
-  var hdrN = cells.filter(function (c) { return c.lines === 1 && (NAME_HDR.test(c.n) || NOT_NAME_HDR.test(c.n)); });
-  var hdrS = cells.filter(function (c) { return c.lines === 1 && /توقيع/.test(c.n) && c.n.split(' ').length <= 3 && !/[:.]/.test(c.text.replace(/\s/g, '').slice(-1)); });
-  if (!hdrS.length) return out;
+  var hdrN = cells.filter(function (c) { return c.lines === 1 && c.n.split(' ').length <= 4 && (NAME_HDR.test(c.n) || NOT_NAME_HDR.test(c.n)); });
+  var hdrS = cells.filter(function (c) { return c.lines === 1 && /توقيع/.test(c.n) && c.n.split(' ').length <= 3 && !/[:.]/.test(c.text.replace(/\s/g, '').slice(-1)) && !/[:.\u2026]{2,}|:/.test(c.text); });
+  var labels = cells.filter(function (c) { return c.lines === 1 && /التوقيع/.test(c.n) && (/[:]/.test(c.text) || /[.\u2026]{3,}/.test(c.text)); });   // «التوقيع: ......» في البطاقات
   var nums = cells.filter(function (c) { return c.lines === 1 && /^[0-9 ]+$/.test(c.n); });
-  var used = [];
+  var used = [], usedLab = [];
   cells.slice().sort(function (a, b) { return b.lines - a.lines; }).forEach(function (c) {
-    var tok = c.n.split(' ').filter(function (t) { return t && t !== 'بن'; }); if (tok.length < 2 || tok.length > 7) return;
+    var tok = c.n.split(' ').filter(function (t) { return t && t !== 'بن'; });
+    while (tok.length > 2 && TITLES[tok[0]]) tok.shift();                       // «د. فلان» / «الأستاذ فلان»
+    var inl = tok.indexOf('التوقيع'), own = null;
+    if (inl >= 0 && c.lines > 1) return;                                        // سطر الاسم مدموج مع سطر «التوقيع» تحته: يُعالج من خانة الاسم المفردة
+    if (inl >= 2) { tok = tok.slice(0, inl); own = c; }                         // الاسم وعبارة التوقيع في سطر واحد
+    if (tok.length < 2 || tok.length > 7) return;
     var who = people.filter(function (p) { return matchName(tok, p.tok); });
     for (var cut = 1; cut <= 2 && who.length !== 1 && tok.length - cut >= 2; cut++) {   // خانة الاسم التصق بها نص العمود المجاور
       var t2 = tok.slice(0, tok.length - cut); who = people.filter(function (p) { return matchName(t2, p.tok); });
     }
     if (who.length !== 1) return;
     if (used.some(function (u) { return Math.abs(u.cy - c.cy) < c.h * 1.6 && Math.min(u.x1, c.x1) - Math.max(u.x0, c.x0) > 0; })) return;   // خانة مطابقة سابقًا (سطر من اسم ملتف)
-    /* عمود الاسم: أقرب ترويسة فوق الخانة ومحاذية لها */
+    var box = null;
     var above = hdrN.filter(function (h) { return h.cy > c.cy && c.cx >= h.x0 - 45 && c.cx <= h.x1 + 45; }).sort(function (a, b) { return a.cy - b.cy; })[0];
-    if (!above || NOT_NAME_HDR.test(above.n)) return;
-    /* صف جدول حقيقي: في الصف نفسه خانة رقمية (التسلسل أو التاريخ) إلى يمين الاسم؛ يستبعد بطاقات التوقيع أسفل الجدول */
-    if (!nums.some(function (d) { return Math.abs(d.cy - c.cy) <= c.h * 1.3 && d.x0 > c.x0; })) return;
-    /* عمود التوقيع: أقرب ترويسة «التوقيع» إلى يسار الاسم في صف الترويسة نفسه */
-    var sg = hdrS.filter(function (h) { return Math.abs(h.cy - above.cy) <= 14 && h.cx < c.x0 + 2; }).sort(function (a, b) { return b.cx - a.cx; })[0];
-    if (!sg) return;
+    if (above && NOT_NAME_HDR.test(above.n)) return;                            // عمود ليس موضع توقيع (مثل «يزور»)
+    /* (1) بطاقة توقيع: عبارة «التوقيع: ......» تحت الاسم أو بجواره */
+    var lab = own || labels.filter(function (L) {
+      if (usedLab.indexOf(L) >= 0) return false;
+      var below = c.yBot - L.cy >= 2 && c.yBot - L.cy <= 34 && Math.min(L.x1, c.x1 + 30) - Math.max(L.x0, c.x0 - 30) > 0;
+      var beside = Math.abs(L.cy - c.cy) <= 5 && L.x1 <= c.x0 + 6 && c.x0 - L.x1 <= 130;
+      return below || beside;
+    }).sort(function (a, b) { return (Math.abs(a.cy - c.cy) + Math.abs(a.cx - c.cx) / 4) - (Math.abs(b.cy - c.cy) + Math.abs(b.cx - c.cx) / 4); })[0];
+    if (lab) {
+      var r = own ? dotsRegion({ parts: c.parts, x0: c.x0 }) : dotsRegion(lab), w = Math.min(60, Math.max(40, r[1] - r[0]));
+      box = { x: (r[0] + r[1]) / 2 - w / 2, y: lab.cy - 5, w: w, h: 17 }; if (!own) usedLab.push(lab);
+    }
+    /* (2) صف في جدول: ترويسة اسم فوق الخانة + عمود «التوقيع» في صف الترويسة نفسه */
+    if (!box && above) {
+      var sg = hdrS.filter(function (h) { return Math.abs(h.cy - above.cy) <= 26 && h.cx < c.x0 + 2; }).sort(function (a, b) { return b.cx - a.cx; })[0];
+      if (sg) box = { x: sg.cx - 23, y: c.cy - 8.5, w: 46, h: 17 };
+    }
+    if (!box || overlaps(box, imgs)) return;   // موضع فيه توقيع مصوَّر سابقًا: لا يُكرَّر
     used.push(c);
-    out.push({ name: who[0].name, x: sg.cx - 23, y: c.cy - 8.5, w: 46, h: 17 });
+    out.push({ name: who[0].name, x: box.x, y: box.y, w: box.w, h: box.h });
   });
   return out;
+}
+/* مواضع الصور في الصفحة (تواقيع وأختام مدرجة سابقًا) بإحداثيات PDF */
+function imageBoxes(pg) {
+  return pg.getOperatorList().then(function (ol) {
+    var O = pdfjsLib.OPS, st = [], m = [1, 0, 0, 1, 0, 0], out = [], W = pg.view[2] - pg.view[0], H = pg.view[3] - pg.view[1];
+    function mul(a, b) { return [a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3], a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5]]; }
+    for (var i = 0; i < ol.fnArray.length; i++) {
+      var f = ol.fnArray[i], a = ol.argsArray[i];
+      if (f === O.save) st.push(m.slice());
+      else if (f === O.restore) m = st.pop() || m;
+      else if (f === O.transform) m = mul(m, a);
+      else if (f === O.paintFormXObjectBegin) { st.push(m.slice()); if (a && a[0]) m = mul(m, a[0]); }
+      else if (f === O.paintFormXObjectEnd) m = st.pop() || m;
+      else if (f === O.paintImageXObject || f === O.paintInlineImageXObject || f === O.paintImageXObjectRepeat || f === O.paintImageMaskXObject) {
+        var xs = [m[4], m[4] + m[0], m[4] + m[2], m[4] + m[0] + m[2]], ys = [m[5], m[5] + m[1], m[5] + m[3], m[5] + m[1] + m[3]];
+        var b = [Math.min.apply(null, xs), Math.min.apply(null, ys), Math.max.apply(null, xs), Math.max.apply(null, ys)];
+        if ((b[2] - b[0]) < W * 0.5 && (b[3] - b[1]) < H * 0.5) out.push(b);   // تُستثنى خلفيات الصفحة
+      }
+    }
+    return out;
+  }).catch(function () { return []; });
 }
 /* خريطة التوقيع: { اسم: [[رقم الصفحة، x، y، w، h] ...] } بإحداثيات PDF */
 function detectSignMap(bytes, peopleNames) {
@@ -237,8 +285,8 @@ function detectSignMap(bytes, peopleNames) {
   return pdfjsLib.getDocument({ data: bytes }).promise.then(function (doc) {
     var map = {}, chain = Promise.resolve();
     for (var p = 1; p <= doc.numPages; p++) (function (p) {
-      chain = chain.then(function () { return doc.getPage(p); }).then(function (pg) { return pg.getTextContent(); }).then(function (tc) {
-        detectPage(tc.items, people).forEach(function (b) { (map[b.name] = map[b.name] || []).push([p, Math.round(b.x), Math.round(b.y), b.w, b.h]); });
+      chain = chain.then(function () { return doc.getPage(p); }).then(function (pg) { return Promise.all([pg.getTextContent(), imageBoxes(pg)]); }).then(function (r) {
+        detectPage(r[0].items, people, r[1]).forEach(function (b) { (map[b.name] = map[b.name] || []).push([p, Math.round(b.x), Math.round(b.y), Math.round(b.w), b.h]); });
       });
     })(p);
     return chain.then(function () { return { map: map, pages: doc.numPages }; });
@@ -302,11 +350,12 @@ function render() {
     var g = signedIn(f, r.name), mine = S.signs[r.name], hide = q && r.name.indexOf(q) < 0;
     if (r.dept !== dept) { dept = r.dept; if (!q) html += '<tr class="dep"><td colspan="4">' + esc(dept) + '</td></tr>'; }
     html += '<tr' + (hide ? ' style="display:none"' : '') + '><td class="n">' + (k + 1) + '</td><td>' +
-      (g ? '<span class="nm done">' + esc(r.name) + '</span>' : '<button class="nm" data-n="' + esc(r.name) + '">' + esc(r.name) + ' <span class="hint">اضغط للتوقيع</span></button>') +
+      ((g || !S.ready) ? '<span class="nm done">' + esc(r.name) + '</span>' : '<button class="nm" data-n="' + esc(r.name) + '">' + esc(r.name) + ' <span class="hint">اضغط للتوقيع</span></button>') +
       (q ? '<div class="dp">' + esc(r.dept) + '</div>' : '') + '</td><td class="sg">' + (g && mine ? svgOf(mine.strokes) : '') + '</td><td class="tm">' + (g ? esc(g.time) : '') + '</td></tr>';
   });
   $('rows').innerHTML = html || '<tr><td colspan="4">لا توجد أسماء.</td></tr>';
   $('ttl').textContent = f ? f.title : 'كشف التوقيع الموحّد لمنسوبي المدرسة';
+  if (!S.ready) { $('sub').innerHTML = S.err ? esc(S.err) + ' <button class="btn sec" onclick="location.reload()">إعادة المحاولة</button>' : 'جارٍ تحميل التوقيعات من جدول المدرسة… قد يستغرق بضع ثوانٍ.'; $('fbar').innerHTML = ''; $('prog').style.width = '0'; return; }
   $('sub').textContent = (!f ? 'يوقّع كل منسوب مرة واحدة، ويُنسخ توقيعه تلقائيًا إلى جميع السجلات المرفقة التي يرد فيها اسمه.'
     : isAuto(f) ? 'سجل مرفق في ' + f.time + ' — توقيع كل معلم يُنسخ تلقائيًا إلى خانته في هذا الملف.' + (f.names && f.names.length ? '' : ' لم تُكتشف فيه خانات توقيع، فتُضاف التوقيعات في صفحة ملحقة.')
     : 'ملف مرسل للتوقيع في ' + f.time + ' — اطّلع على الملف ثم اضغط على اسمك للتوقيع.') + ' وقّع ' + done + ' من ' + list.length + '.';
@@ -355,8 +404,10 @@ function sheetCanvas(title, rows, pageNo, pages) {
 }
 function signedCopy(f) {
   return new Promise(function (res, rej) { run('getFile', [f.id], res, function (m) { rej(new Error(m)); }); }).then(function (o) {
-    return needPdfLib().then(function () {
-      var map = {}; try { map = o.map ? JSON.parse(o.map) : {}; } catch (e) {}
+    var isPdf0 = /pdf/i.test(o.mime || '') || /\.pdf$/i.test(o.name || ''), stored = {}; try { stored = o.map ? JSON.parse(o.map) : {}; } catch (e) {}
+    /* تُعاد قراءة مواضع التوقيع عند كل تنزيل، فتشمل كل موضع يرد فيه الاسم (الجداول وبطاقات التوقيع) */
+    var fresh = isPdf0 ? needPdfJs().then(function () { return detectSignMap(b64bytes(o.b64), S.people.map(function (p) { return p.name; })); }).then(function (r) { return Object.keys(r.map).length ? r.map : stored; }).catch(function () { return stored; }) : Promise.resolve(stored);
+    return fresh.then(function (map) { return needPdfLib().then(function () {
       var signs = {}; Object.keys(S.signs).forEach(function (n) { if (signedIn(f, n)) signs[n] = S.signs[n].strokes; });
       var isPdf = /pdf/i.test(o.mime || '') || /\.pdf$/i.test(o.name || '');
       var start = isPdf ? stampPdf(b64bytes(o.b64), map, signs) : PDFLib.PDFDocument.create().then(function (d) { return { doc: d, count: 0, img: true }; });
@@ -364,15 +415,15 @@ function signedCopy(f) {
         var doc = r.doc, chain = Promise.resolve();
         if (r.img) chain = chain.then(function () { return (/png/i.test(o.mime) ? doc.embedPng(b64bytes(o.b64)) : doc.embedJpg(b64bytes(o.b64))).then(function (im) {
           var pg = doc.addPage([595.28, 841.89]), k = Math.min(555 / im.width, 800 / im.height); pg.drawImage(im, { x: (595.28 - im.width * k) / 2, y: 841.89 - 20 - im.height * k, width: im.width * k, height: im.height * k }); }); });
-        /* من ليس له خانة في الملف: صفحة توقيعات ملحقة */
-        var extra = listFor(f).filter(function (p) { return !map[p.name]; }).map(function (p, i) { var g = signedIn(f, p.name); return { no: i + 1, name: p.name, dept: p.dept, time: g ? g.time : '', strokes: g && S.signs[p.name] ? S.signs[p.name].strokes : '' }; });
+        /* الصفحة الملحقة تُضاف فقط إذا لم يوجد في الملف أي موضع توقيع (ملف ممسوح ضوئيًا أو بلا خانات) */
+        var extra = (Object.keys(map).length ? [] : listFor(f)).map(function (p, i) { var g = signedIn(f, p.name); return { no: i + 1, name: p.name, dept: p.dept, time: g ? g.time : '', strokes: g && S.signs[p.name] ? S.signs[p.name].strokes : '' }; });
         var per = 28, pages = Math.ceil(extra.length / per);
         for (var i = 0; i < pages; i++) (function (i) { chain = chain.then(function () {
           var cv = sheetCanvas(f.title, extra.slice(i * per, (i + 1) * per), i + 1, pages);
           return doc.embedPng(cv.toDataURL('image/png')).then(function (im) { doc.addPage([595.28, 841.89]).drawImage(im, { x: 0, y: 0, width: 595.28, height: 841.89 }); }); }); })(i);
         return chain.then(function () { return doc.save(); }).then(function (bytes) { saveBytes(bytes, 'application/pdf', (f.title || 'ملف').replace(/[\\/:*?"<>|]/g, ' ') + ' - موقّع.pdf'); });
       });
-    });
+    }); });
   });
 }
 
@@ -450,12 +501,15 @@ $('uSend').onclick = function () {
 
 /* ---------- التحميل والتحديث الدوري ---------- */
 function stamp() { var d = new Date(); $('upd').textContent = 'آخر تحديث ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
+S.people = LT.map(function (t) { return { name: t[0], dept: t[1] }; }); render();   // الأسماء تظهر فورًا، ثم تُحمَّل التوقيعات
+var slow = setTimeout(function () { if (!S.ready) { S.err = 'تأخر الاتصال بجدول التوقيعات.'; render(); } }, 45000);
 run('getState', [ADMIN_KEY], function (st) {
+  clearTimeout(slow); S.ready = true; S.err = '';
   S.people = st.people; S.admin = !!st.admin; S.appUrl = HOSTED ? location.origin + location.pathname : (st.appUrl || ''); merge(st);
   if (START_FILE && S.files.some(function (x) { return x.id === START_FILE; })) S.cur = START_FILE;
   render(); stamp();
   if (LIVE || HOSTED) setInterval(function () { run('getSince', [S.count, S.fcount], function (r) { var ch = r.signs.length || r.fsigns.length || r.files.length !== S.files.length; merge(r); if (ch && !target) render(); stamp(); }); }, 12000);
-}, function (msg) { $('rows').innerHTML = '<tr><td colspan="4">' + esc(msg) + '</td></tr>'; });
+}, function (msg) { clearTimeout(slow); S.err = msg; render(); });
 if (!LIVE && !HOSTED) {
   if (!(window.storage && window.storage.get)) $('loc').innerHTML = '<b>النظام لم يُربط بجدول التوقيعات بعد</b> — ما يُوقَّع أو يُرفق هنا تجربة فقط: لا يُحفظ بعد إغلاق الصفحة ولا يراه بقية المنسوبين.';
   $('loc').style.display = 'block'; $('locTools').style.display = 'flex';
