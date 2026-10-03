@@ -69,7 +69,7 @@ details ol{padding-right:18px;margin-top:4px;color:var(--mute);line-height:1.6}
   <div class="sub" id="sub"></div>
   <div class="fbar" id="fbar"></div>
   <div class="bar"><i id="prog" style="width:0"></i></div>
-  <table><thead><tr><th>م</th><th>الاسم</th><th>التوقيع</th><th>الوقت</th></tr></thead><tbody id="rows"><tr><td colspan="4">جارٍ التحميل…</td></tr></tbody></table></div>
+  <table><thead><tr><th>م</th><th>الاسم</th><th>التوقيع</th></tr></thead><tbody id="rows"><tr><td colspan="3">جارٍ التحميل…</td></tr></tbody></table></div>
 </section>
 <div class="ft"><span class="dp" id="upd"></span><button class="btn sec" onclick="window.print()">طباعة الكشف</button></div>
 <div class="ft" id="locTools" style="display:none"><button class="btn sec" id="bExport">نسخ بيانات التوقيعات</button><button class="btn sec" id="bReset">مسح كل التوقيعات</button></div>
@@ -82,6 +82,14 @@ details ol{padding-right:18px;margin-top:4px;color:var(--mute);line-height:1.6}
   <details id="dDet"><summary id="dCount"></summary><ol id="dDocs"></ol></details>
   <div class="msg" id="dMsg"></div>
   <div class="row"><button class="btn sec" id="bCancel">إلغاء</button><button class="btn sec" id="bClear">مسح</button><button class="btn" id="bSave">حفظ التوقيع</button></div>
+</div></div>
+
+<div class="ov" id="dv"><div class="dlg" role="dialog" aria-modal="true">
+  <h3>حذف ملفات</h3><p>حدّد الملفات المراد حذفها. تختفي من الصفحة عند الجميع، وتُنقل إلى سلة محذوفات Google Drive. توقيعات المعلمين المحفوظة لا تتأثر.</p>
+  <label class="rd" style="margin-top:10px"><input type="checkbox" id="dAll"><span><b>تحديد الكل</b></span></label>
+  <div id="dList" style="max-height:46vh;overflow:auto;margin-top:6px"></div>
+  <div class="msg" id="dvMsg"></div>
+  <div class="row"><button class="btn sec" id="dvCancel">إلغاء</button><button class="btn del" id="dvGo" style="background:#a1271b;color:#fff;border:0">حذف المحدد</button></div>
 </div></div>
 
 <div class="ov" id="uv"><div class="dlg" role="dialog" aria-modal="true">
@@ -148,6 +156,8 @@ var Local = {
     return lsave().then(function () { var r = lsince(n, fn); r.newId = id; return r; }); },
   removeFile: function (key, id, n, fn) { L.files = L.files.filter(function (f) { return f.id !== id; }); L.fsigns = L.fsigns.filter(function (g) { return g.file !== id; }); delete L.blobs[id];
     return lsave().then(function () { var r = { signs: L.signs.slice(n), count: L.signs.length, files: L.files.slice(), fsigns: [], fcount: L.fsigns.length, removed: id }; return r; }); },
+  removeFiles: function (key, ids, n, fn) { L.files = L.files.filter(function (f) { return ids.indexOf(f.id) < 0; }); L.fsigns = L.fsigns.filter(function (g) { return ids.indexOf(g.file) < 0; }); ids.forEach(function (id) { delete L.blobs[id]; });
+    return lsave().then(function () { return { signs: L.signs.slice(n), count: L.signs.length, files: L.files.slice(), fsigns: [], fcount: L.fsigns.length, removedIds: ids }; }); },
   getFile: function (id) { return L.blobs[id] ? Promise.resolve(L.blobs[id]) : Promise.reject(new Error('الملف محفوظ على هذا الجهاز لهذه الجلسة فقط؛ أعد رفعه.')); }
 };
 function run(fn, args, ok, fail) {
@@ -324,7 +334,8 @@ function merge(r) {
   (r.signs || []).forEach(function (s) { if (!S.signs[s.name]) S.signs[s.name] = s; });
   (r.fsigns || []).forEach(function (s) { S.fs[s.file + '|' + s.name] = s; });
   if (r.files) S.files = r.files; if (r.count != null) S.count = r.count; if (r.fcount != null) S.fcount = r.fcount;
-  if (r.removed) Object.keys(S.fs).forEach(function (k) { if (k.indexOf(r.removed + '|') === 0) delete S.fs[k]; });
+  var gone = (r.removedIds || []).concat(r.removed ? [r.removed] : []);
+  if (gone.length) Object.keys(S.fs).forEach(function (k) { if (gone.indexOf(k.split('|')[0]) >= 0) delete S.fs[k]; });
 }
 function svgOf(json) {
   try { var st = JSON.parse(json), d = st.map(function (s) { return s.map(function (p, i) { return (i ? 'L' : 'M') + p[0] + ' ' + p[1]; }).join(' ') + (s.length === 1 ? ' l0.1 0' : ''); }).join(' ');
@@ -345,15 +356,15 @@ function render() {
   var q = $('find').value.trim(), html = '', dept = null, list = listFor(f), done = doneOf(f);
   $('tabs').innerHTML = '<button class="tab' + (S.cur === 'u' ? ' on' : '') + '" data-id="u">الكشف الموحّد<b>' + doneOf(null) + '/' + S.people.length + '</b></button>' +
     S.files.map(function (x) { return '<button class="tab' + (S.cur === x.id ? ' on' : '') + '" data-id="' + esc(x.id) + '" title="' + esc(x.title) + '">' + esc(x.title) + '<b>' + doneOf(x) + '/' + listFor(x).length + '</b></button>'; }).join('') +
-    (S.admin ? '<button class="tab add" data-id="+">+ إرفاق ملفات</button>' : '');
+    (S.admin ? '<button class="tab add" data-id="+">+ إرفاق ملفات</button>' + (S.files.length ? '<button class="tab add" data-id="-" style="color:#a1271b;border-color:#e3b3ad">حذف ملفات</button>' : '') : '');
   list.forEach(function (r, k) {
     var g = signedIn(f, r.name), mine = S.signs[r.name], hide = q && r.name.indexOf(q) < 0;
-    if (r.dept !== dept) { dept = r.dept; if (!q) html += '<tr class="dep"><td colspan="4">' + esc(dept) + '</td></tr>'; }
+    if (r.dept !== dept) { dept = r.dept; if (!q) html += '<tr class="dep"><td colspan="3">' + esc(dept) + '</td></tr>'; }
     html += '<tr' + (hide ? ' style="display:none"' : '') + '><td class="n">' + (k + 1) + '</td><td>' +
       ((g || !S.ready) ? '<span class="nm done">' + esc(r.name) + '</span>' : '<button class="nm" data-n="' + esc(r.name) + '">' + esc(r.name) + ' <span class="hint">اضغط للتوقيع</span></button>') +
-      (q ? '<div class="dp">' + esc(r.dept) + '</div>' : '') + '</td><td class="sg">' + (g && mine ? svgOf(mine.strokes) : '') + '</td><td class="tm">' + (g ? esc(g.time) : '') + '</td></tr>';
+      (q ? '<div class="dp">' + esc(r.dept) + '</div>' : '') + '</td><td class="sg">' + (g && mine ? svgOf(mine.strokes) : '') + '</td></tr>';
   });
-  $('rows').innerHTML = html || '<tr><td colspan="4">لا توجد أسماء.</td></tr>';
+  $('rows').innerHTML = html || '<tr><td colspan="3">لا توجد أسماء.</td></tr>';
   $('ttl').textContent = f ? f.title : 'كشف التوقيع الموحّد لمنسوبي المدرسة';
   if (!S.ready) { $('sub').innerHTML = S.err ? esc(S.err) + ' <button class="btn sec" onclick="location.reload()">إعادة المحاولة</button>' : 'جارٍ تحميل التوقيعات من جدول المدرسة… قد يستغرق بضع ثوانٍ.'; $('fbar').innerHTML = ''; $('prog').style.width = '0'; return; }
   $('sub').textContent = (!f ? 'يوقّع كل منسوب مرة واحدة، ويُنسخ توقيعه تلقائيًا إلى جميع السجلات المرفقة التي يرد فيها اسمه.'
@@ -363,7 +374,7 @@ function render() {
   $('prog').style.width = (list.length ? Math.round(done * 100 / list.length) : 0) + '%';
 }
 $('find').oninput = render;
-$('tabs').onclick = function (e) { var b = e.target.closest('.tab'); if (!b) return; if (b.dataset.id === '+') return openUpload(); S.cur = b.dataset.id; render(); window.scrollTo(0, 0); };
+$('tabs').onclick = function (e) { var b = e.target.closest('.tab'); if (!b) return; if (b.dataset.id === '+') return openUpload(); if (b.dataset.id === '-') return openBulk(); S.cur = b.dataset.id; render(); window.scrollTo(0, 0); };
 $('rows').onclick = function (e) { var b = e.target.closest('button.nm'); if (!b) return; var p = S.people.filter(function (x) { return x.name === b.dataset.n; })[0]; if (p) openPad(p); };
 $('fbar').onclick = function (e) {
   var f = curFile(); if (!f) return;
@@ -382,48 +393,21 @@ $('fbar').onclick = function (e) {
 function saveBytes(bytes, mime, name) { var u = URL.createObjectURL(new Blob([bytes], { type: mime || 'application/pdf' })), l = document.createElement('a'); l.href = u; l.target = '_blank'; l.rel = 'noopener'; l.download = name || 'file'; document.body.appendChild(l); l.click(); l.remove(); }
 function openBlob(o) { saveBytes(b64bytes(o.b64), o.mime, o.name); }
 
-/* ---------- النسخة الموقّعة: نسخ التوقيعات إلى خاناتها + صفحة توقيعات ملحقة عند الحاجة ---------- */
-function sheetCanvas(title, rows, pageNo, pages) {
-  var W = 1240, H = 1754, c = document.createElement('canvas'), x = c.getContext('2d'); c.width = W; c.height = H;
-  x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.direction = 'rtl'; x.textAlign = 'right'; x.textBaseline = 'middle';
-  x.fillStyle = '#15445A'; x.fillRect(0, 0, W, 150); x.fillStyle = '#07A869'; x.fillRect(0, 150, W, 10);
-  x.fillStyle = '#fff'; x.font = '800 34px Tajawal, Tahoma, Arial'; x.fillText('مدرسة القعقاع بن عمرو المتوسطة', W - 60, 55);
-  x.font = '500 24px Tajawal, Tahoma, Arial'; x.fillText('كشف التوقيعات الملحق' + (pages > 1 ? ' (' + pageNo + '/' + pages + ')' : ''), W - 60, 105);
-  x.fillStyle = '#15445A'; x.font = '800 30px Tajawal, Tahoma, Arial'; x.fillText(title.length > 62 ? title.slice(0, 60) + '…' : title, W - 60, 215);
-  var top = 270, rh = 50, cols = [W - 60, W - 130, W - 610, W - 880, 60];   // م | الاسم | القسم | الوقت | التوقيع
-  x.fillStyle = '#15445A'; x.fillRect(60, top, W - 120, rh); x.fillStyle = '#fff'; x.font = '800 24px Tajawal, Tahoma, Arial';
-  x.fillText('م', cols[0] - 14, top + rh / 2); x.fillText('الاسم', cols[1] - 10, top + rh / 2); x.fillText('القسم', cols[2] - 10, top + rh / 2); x.fillText('وقت التوقيع', cols[3] - 10, top + rh / 2); x.textAlign = 'left'; x.fillText('التوقيع', 110, top + rh / 2); x.textAlign = 'right';
-  rows.forEach(function (r, i) {
-    var y = top + rh * (i + 1); x.strokeStyle = '#b9c6cc'; x.lineWidth = 1.5; x.strokeRect(60, y, W - 120, rh);
-    x.fillStyle = '#15445A'; x.font = '800 23px Tajawal, Tahoma, Arial'; x.fillText(String(r.no), cols[0] - 14, y + rh / 2); x.fillText(r.name, cols[1] - 10, y + rh / 2);
-    x.font = '500 21px Tajawal, Tahoma, Arial'; x.fillText(r.dept, cols[2] - 10, y + rh / 2); x.direction = 'ltr'; x.fillText(r.time || '', cols[3] - 10, y + rh / 2); x.direction = 'rtl';
-    if (r.strokes) { try { var st = JSON.parse(r.strokes), sc = Math.min(260 / 600, (rh - 8) / 220), ox = 80, oy = y + 4; x.strokeStyle = '#0b2fb0'; x.lineWidth = 2.2; x.lineCap = 'round'; x.lineJoin = 'round';
-      st.forEach(function (s) { x.beginPath(); s.forEach(function (p, k) { if (k) x.lineTo(ox + p[0] * sc, oy + p[1] * sc); else x.moveTo(ox + p[0] * sc, oy + p[1] * sc); }); x.stroke(); }); } catch (e) {} }
-  });
-  return c;
-}
+/* ---------- النسخة الموقّعة: التوقيعات في خاناتها فقط ---------- */
 function signedCopy(f) {
   return new Promise(function (res, rej) { run('getFile', [f.id], res, function (m) { rej(new Error(m)); }); }).then(function (o) {
-    var isPdf0 = /pdf/i.test(o.mime || '') || /\.pdf$/i.test(o.name || ''), stored = {}; try { stored = o.map ? JSON.parse(o.map) : {}; } catch (e) {}
-    /* تُعاد قراءة مواضع التوقيع عند كل تنزيل، فتشمل كل موضع يرد فيه الاسم (الجداول وبطاقات التوقيع) */
-    var fresh = isPdf0 ? needPdfJs().then(function () { return detectSignMap(b64bytes(o.b64), S.people.map(function (p) { return p.name; })); }).then(function (r) { return Object.keys(r.map).length ? r.map : stored; }).catch(function () { return stored; }) : Promise.resolve(stored);
-    return fresh.then(function (map) { return needPdfLib().then(function () {
-      var signs = {}; Object.keys(S.signs).forEach(function (n) { if (signedIn(f, n)) signs[n] = S.signs[n].strokes; });
-      var isPdf = /pdf/i.test(o.mime || '') || /\.pdf$/i.test(o.name || '');
-      var start = isPdf ? stampPdf(b64bytes(o.b64), map, signs) : PDFLib.PDFDocument.create().then(function (d) { return { doc: d, count: 0, img: true }; });
-      return start.then(function (r) {
-        var doc = r.doc, chain = Promise.resolve();
-        if (r.img) chain = chain.then(function () { return (/png/i.test(o.mime) ? doc.embedPng(b64bytes(o.b64)) : doc.embedJpg(b64bytes(o.b64))).then(function (im) {
-          var pg = doc.addPage([595.28, 841.89]), k = Math.min(555 / im.width, 800 / im.height); pg.drawImage(im, { x: (595.28 - im.width * k) / 2, y: 841.89 - 20 - im.height * k, width: im.width * k, height: im.height * k }); }); });
-        /* الصفحة الملحقة تُضاف فقط إذا لم يوجد في الملف أي موضع توقيع (ملف ممسوح ضوئيًا أو بلا خانات) */
-        var extra = (Object.keys(map).length ? [] : listFor(f)).map(function (p, i) { var g = signedIn(f, p.name); return { no: i + 1, name: p.name, dept: p.dept, time: g ? g.time : '', strokes: g && S.signs[p.name] ? S.signs[p.name].strokes : '' }; });
-        var per = 28, pages = Math.ceil(extra.length / per);
-        for (var i = 0; i < pages; i++) (function (i) { chain = chain.then(function () {
-          var cv = sheetCanvas(f.title, extra.slice(i * per, (i + 1) * per), i + 1, pages);
-          return doc.embedPng(cv.toDataURL('image/png')).then(function (im) { doc.addPage([595.28, 841.89]).drawImage(im, { x: 0, y: 0, width: 595.28, height: 841.89 }); }); }); })(i);
-        return chain.then(function () { return doc.save(); }).then(function (bytes) { saveBytes(bytes, 'application/pdf', (f.title || 'ملف').replace(/[\\/:*?"<>|]/g, ' ') + ' - موقّع.pdf'); });
+    var isPdf = /pdf/i.test(o.mime || '') || /\.pdf$/i.test(o.name || '');
+    if (!isPdf) throw new Error('التوقيعات توضع في خاناتها داخل ملفات PDF فقط؛ أرفق هذا المستند بصيغة PDF.');
+    /* تُعاد قراءة مواضع التوقيع عند كل تنزيل: عمود «التوقيع» المقابل للاسم، وبطاقات «التوقيع: ......» */
+    return needPdfJs().then(function () { return detectSignMap(b64bytes(o.b64), S.people.map(function (p) { return p.name; })); })
+      .catch(function () { throw new Error('تعذّر تحميل قارئ ملفات PDF، تحقق من الاتصال ثم أعد المحاولة.'); })
+      .then(function (r) {
+        var map = r.map;
+        if (!Object.keys(map).length) throw new Error('لم يتعرّف النظام على خانات توقيع بأسماء المنسوبين في هذا الملف، فلم يُضف إليه أي توقيع.');
+        var signs = {}; Object.keys(S.signs).forEach(function (n) { if (signedIn(f, n)) signs[n] = S.signs[n].strokes; });
+        return needPdfLib().then(function () { return stampPdf(b64bytes(o.b64), map, signs); }).then(function (st) { return st.doc.save(); })
+          .then(function (bytes) { saveBytes(bytes, 'application/pdf', (f.title || 'ملف').replace(/[\\/:*?"<>|]/g, ' ') + ' - موقّع.pdf'); });
       });
-    }); });
   });
 }
 
@@ -456,7 +440,7 @@ pad.addEventListener('pointermove', function (e) { if (!stroke) return; e.preven
 $('bClear').onclick = function () { strokes = []; redraw(); };
 $('bCancel').onclick = closePad;
 $('ov').onclick = function (e) { if (e.target === this) closePad(); };
-document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closePad(); $('uv').className = 'ov'; } });
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closePad(); $('uv').className = 'ov'; $('dv').className = 'ov'; } });
 $('bSave').onclick = function () {
   var pts = strokes.reduce(function (a, s) { return a + s.length; }, 0), m = $('dMsg'), b = this, label = b.textContent, f = curFile();
   if (!locked && pts < 8) { m.textContent = 'ارسم توقيعك داخل الإطار أولًا.'; m.className = 'msg on'; return; }
@@ -464,6 +448,33 @@ $('bSave').onclick = function () {
   run('sign', [target.name, locked ? '' : JSON.stringify(strokes), (f && !isAuto(f)) ? f.id : '', S.count, S.fcount], function (res) {
     b.disabled = false; b.textContent = label; merge(res); closePad(); render(); stamp();
   }, function (msg) { b.disabled = false; b.textContent = label; m.textContent = msg; m.className = 'msg on'; });
+};
+
+/* ---------- حذف عدة ملفات دفعة واحدة (المشرف) ---------- */
+function openBulk() {
+  $('dList').innerHTML = S.files.map(function (f) { return '<label class="rd"><input type="checkbox" value="' + esc(f.id) + '"><span>' + esc(f.title) + '<br><span class="dp">' + (isAuto(f) ? 'سجل' : 'للاطلاع والتوقيع') + ' — ' + esc(f.time) + '</span></span></label>'; }).join('');
+  $('dAll').checked = false; $('dvMsg').className = 'msg'; $('dvGo').disabled = false; $('dvGo').textContent = 'حذف المحدد'; $('dv').className = 'ov on';
+}
+$('dAll').onchange = function () { var on = this.checked; [].forEach.call(document.querySelectorAll('#dList input'), function (x) { x.checked = on; }); };
+$('dvCancel').onclick = function () { $('dv').className = 'ov'; };
+$('dv').onclick = function (e) { if (e.target === this) this.className = 'ov'; };
+$('dvGo').onclick = function () {
+  var ids = [].slice.call(document.querySelectorAll('#dList input:checked')).map(function (x) { return x.value; }), b = this, m = $('dvMsg');
+  if (!ids.length) { m.textContent = 'حدّد ملفًا واحدًا على الأقل.'; m.className = 'msg on'; return; }
+  if (!confirm('سيُحذف ' + ids.length + ' ملف من الصفحة عند جميع المنسوبين. متابعة؟')) return;
+  b.disabled = true; b.textContent = 'جارٍ الحذف…'; m.className = 'msg';
+  function done(r) { merge(r); if (ids.indexOf(S.cur) >= 0) S.cur = 'u'; $('dv').className = 'ov'; render(); stamp(); window.scrollTo(0, 0); }
+  function fail(msg) { b.disabled = false; b.textContent = 'حذف المحدد'; render(); m.textContent = msg; m.className = 'msg on'; }
+  run('removeFiles', [ADMIN_KEY, ids, S.count, S.fcount], done, function (msg) {
+    if (!/غير معروف/.test(msg)) return fail(msg);
+    /* خادم بنسخة أقدم: يُحذف ملفًا ملفًا */
+    var k = 0, last = null;
+    (function next() {
+      if (k >= ids.length) { last = last || {}; last.removedIds = ids; return done(last); }
+      b.textContent = 'جارٍ الحذف ' + (k + 1) + ' من ' + ids.length + '…';
+      run('removeFile', [ADMIN_KEY, ids[k], S.count, S.fcount], function (r) { last = r; merge(r); k++; next(); }, function (er) { if (/غير موجود/.test(er)) { k++; return next(); } fail(er); });
+    })();
+  });
 };
 
 /* ---------- إرفاق الملفات (المشرف) ---------- */
