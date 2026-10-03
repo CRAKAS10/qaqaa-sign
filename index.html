@@ -203,11 +203,24 @@ function pageCells(items) {
   });
   segs.forEach(function (s) {   // الحروف تأتي عناصر منفردة: تُضم من اليمين إلى اليسار، وتُفصل الكلمات عند الفجوات
     var ps = s.parts.slice().sort(function (a, b) { return b.x0 - a.x0; }), t = '', prev = null;
-    ps.forEach(function (p) { if (prev && prev.x0 - p.x1 > Math.max(1.3, p.h * 0.14)) t += ' '; t += p.t; prev = p; });
-    s.text = t; s.yTop = s.y + s.h; s.yBot = s.y;
+    var words = [], cw = null;
+    ps.forEach(function (p) {
+      var gap = prev && prev.x0 - p.x1 > Math.max(1.3, p.h * 0.14);
+      if (gap) t += ' '; t += p.t; prev = p;
+      if (gap || !cw) { cw = null; }
+      var pieces = p.t.split(/\s+/), tot = 0; pieces.forEach(function (q) { tot += q.length + 1; }); tot = Math.max(tot - 1, 1);
+      var xr = p.x1, wd = p.x1 - p.x0;   // تقسيم العنصر على كلماته من اليمين إلى اليسار بنسبة عدد الحروف
+      pieces.forEach(function (q, i) {
+        var xl = xr - wd * q.length / tot;
+        if (i > 0) cw = null;
+        if (q) { if (cw) { cw.t += q; cw.x0 = Math.min(cw.x0, xl); } else { cw = { t: q, x0: xl, x1: xr }; words.push(cw); } }
+        xr = xl - wd * 1 / tot;
+      });
+    });
+    s.text = t; s.words = words; s.yTop = s.y + s.h; s.yBot = s.y;
   });
   /* دمج سطرين متتاليين في الخانة نفسها (اسم ملتف على سطرين) */
-  var cells = segs.map(function (s) { return { x0: s.x0, x1: s.x1, yTop: s.yTop, yBot: s.yBot, h: s.h, text: s.text, lines: 1, parts: s.parts }; });
+  var cells = segs.map(function (s) { return { x0: s.x0, x1: s.x1, yTop: s.yTop, yBot: s.yBot, h: s.h, text: s.text, lines: 1, parts: s.parts, words: s.words }; });
   segs.forEach(function (a) {
     segs.forEach(function (b) {
       if (a === b || b.y >= a.y) return; var dy = a.y - b.y; if (dy > a.h * 1.75) return;
@@ -242,7 +255,7 @@ var DIAG = { named: 0, occ: 0, texts: 0 };
 /* أطول نافذة متصلة من كلمات الخانة تطابق اسم منسوب واحد فقط (وتُسقَط الألقاب والعبارات المجاورة) */
 function findPerson(tok, people) {
   tok = tok.slice(); while (tok.length > 2 && TITLES[tok[0]]) tok.shift();
-  if (tok.length < 2 || tok.length > 12) return null;
+  if (tok.length < 2 || tok.length > 40) return null;
   for (var len = Math.min(tok.length, 7); len >= 2; len--) for (var st = 0; st + len <= tok.length; st++) {
     var w = tok.slice(st, st + len), m = people.filter(function (p) { return matchName(w, p.tok); });
     if (m.length === 1) return m[0];
@@ -260,6 +273,15 @@ function detectPage(items, people, imgs) {
   var cells = pageCells(items), out = [];
   var hdrN = cells.filter(function (c) { return c.lines === 1 && c.n.split(' ').length <= 4 && (NAME_HDR.test(c.n) || NOT_NAME_HDR.test(c.n)); });
   var hdrS = cells.filter(function (c) { return c.lines === 1 && /توقيع/.test(c.n) && c.n.split(' ').length <= 3 && !/[:.]/.test(c.text.replace(/\s/g, '').slice(-1)) && !/[:.\u2026]{2,}|:/.test(c.text); });
+  cells.forEach(function (c) {
+    if (c.lines !== 1 || !c.words || c.words.length < 2 || /[:.\u2026]/.test(c.text)) return;
+    var ws = c.words.map(function (w) { return { n: normAr(w.t), x0: w.x0, x1: w.x1 }; }).sort(function (a, b) { return a.x0 - b.x0; });
+    ws.forEach(function (w, i) {
+      var mk = function () { return { x0: w.x0, x1: w.x1, cx: (w.x0 + w.x1) / 2, cy: c.cy, yTop: c.yTop, yBot: c.yBot, h: c.h, lines: 1, text: w.n, n: w.n, lx: i > 0 ? ws[i - 1].x1 : null, rx: i < ws.length - 1 ? ws[i + 1].x0 : null, pseudo: true }; };
+      if ((w.n === 'التوقيع' || w.n === 'توقيع') && hdrS.indexOf(c) < 0) hdrS.push(mk());
+      if ((w.n === 'الاسم' || w.n === 'اسم') && !NAME_HDR.test(c.n)) { var nx = ws[i - 1] ? ws[i - 1].n : ''; if (!/^(الطالب|المدرسه|البرنامج|المؤسسه|الشريك)$/.test(nx)) hdrN.push(mk()); }
+    });
+  });
   var labels = cells.filter(function (c) { return c.lines === 1 && /التوقيع/.test(c.n) && (/[:]/.test(c.text) || /[.\u2026]{3,}/.test(c.text)); });   // «التوقيع: ......» في البطاقات
   var nums = cells.filter(function (c) { return c.lines === 1 && /^[0-9 ]+$/.test(c.n); });
   var used = [], usedLab = [];
@@ -271,7 +293,7 @@ function detectPage(items, people, imgs) {
     if (!hit) return;
     var who = [hit];
     DIAG.named++;
-    if (used.some(function (u) { return Math.min(u.yTop, c.yTop) - Math.max(u.yBot, c.yBot) > c.h * 0.3 && Math.min(u.x1, c.x1) - Math.max(u.x0, c.x0) > 0; })) return;   // خانة مطابقة سابقًا (سطر من اسم ملتف)
+    if (used.some(function (u) { return Math.min(u.yTop, c.yTop) - Math.max(u.yBot, c.yBot) > Math.min(u.h, c.h) * 0.6 && Math.min(u.x1, c.x1) - Math.max(u.x0, c.x0) > 0; })) return;   // خانة مطابقة سابقًا (سطر من اسم ملتف)
     var box = null;
     var above = hdrN.filter(function (h) { return h.cy > c.cy && Math.min(c.x1, h.x1 + 45) - Math.max(c.x0, h.x0 - 45) > 0; }).sort(function (a, b) { return (a.cy - b.cy) || (Math.abs(a.cx - c.cx) - Math.abs(b.cx - c.cx)); })[0];   // الاسم القصير المحاذى لليمين قد يبتعد مركزه عن ترويسة «الاسم»
     if (above && NOT_NAME_HDR.test(above.n)) return;                            // عمود ليس موضع توقيع (مثل «يزور»)
@@ -293,8 +315,11 @@ function detectPage(items, people, imgs) {
       if (sg) {
         var row = cells.filter(function (h) { return h !== sg && h.lines === 1 && Math.abs(h.cy - sg.cy) <= 4; });
         var ln = row.filter(function (h) { return h.x1 <= sg.x0; }).sort(function (a, b) { return b.x1 - a.x1; })[0], rn = row.filter(function (h) { return h.x0 >= sg.x1; }).sort(function (a, b) { return a.x0 - b.x0; })[0];
-        var half = Math.min(ln ? (sg.x0 - ln.x1) / 2 + (sg.x1 - sg.x0) / 2 : 60, rn ? (rn.x0 - sg.x1) / 2 + (sg.x1 - sg.x0) / 2 : 60);
-        var bw = Math.max(46, Math.min(100, half * 2 * 0.8)), bh = Math.max(16, Math.min(22, c.h * 1.5));
+        var lx = sg.pseudo && sg.lx != null ? sg.lx : (ln ? ln.x1 : null), rx = sg.pseudo && sg.rx != null ? sg.rx : (rn ? rn.x0 : null);
+        var half = Math.min(lx != null ? (sg.x0 - lx) / 2 + (sg.x1 - sg.x0) / 2 : 60, rx != null ? (rx - sg.x1) / 2 + (sg.x1 - sg.x0) / 2 : 60);
+        var pitch = cells.filter(function (o) { return o !== c && o.lines === 1 && Math.min(o.x1, c.x1) - Math.max(o.x0, c.x0) > 0 && Math.abs(o.cy - c.cy) > c.h * 0.5; })
+          .reduce(function (m, o) { return Math.min(m, Math.abs(o.cy - c.cy)); }, 99);   // المسافة إلى الصف المجاور
+        var bw = Math.max(46, Math.min(100, half * 2 * 0.8)), bh = Math.max(9, Math.min(22, c.h * 1.5, pitch * 0.9));
         box = { x: sg.cx - bw / 2, y: c.cy - bh / 2, w: bw, h: bh };
       }
     }
