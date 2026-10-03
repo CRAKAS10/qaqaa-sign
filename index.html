@@ -221,9 +221,20 @@ function pageCells(items) {
 var NAME_HDR = /(^| )(الاسم|اسم)( |$)|^(المعلم|المعلم الزائر|المعلم المنفذ|المنفذ|معلمو القسم|المعلمون|العضو|الاعضاء|اعضاء الفريق|المكلف|المعلم المكلف|الموظف|المنسوب)$/, NOT_NAME_HDR = /^(يزور|المعلم المزور|المعلم المزار|اسم الطالب|اسم المدرسه|اسم البرنامج|اسم المؤسسه|اسم الشريك)/;
 /* منطقة السطر المنقّط في عبارة «التوقيع: ........» (يسار العبارة) */
 function dotsRegion(c) {
-  var ps = (c.parts || []).slice().sort(function (a, b) { return a.x0 - b.x0; }), k = 0;
-  while (k < ps.length && /^[.\u2026\u00b7_:\-\s]+$/.test(ps[k].t)) k++;
-  if (k > 0 && ps[k - 1].x1 - ps[0].x0 >= 18) return [ps[0].x0, ps[k - 1].x1];
+  var ps = (c.parts || []).slice().sort(function (a, b) { return a.x0 - b.x0; }), x0 = null, x1 = null;
+  function wt(ch) { return /[.\u2026\u00b7_]/.test(ch) ? 0.3 : (/\s/.test(ch) ? 0.25 : 0.55); }
+  for (var k = 0; k < ps.length; k++) {
+    var t = ps[k].t, dots = (t.match(/[.\u2026\u00b7_]/g) || []).length;
+    if (!dots) break;                                                     // وصلنا إلى كلمة «التوقيع»
+    var a = ps[k].x0, b = ps[k].x1;
+    if (/[^.\u2026\u00b7_:\-\s]/.test(t)) {                                // نص ونقاط في عنصر واحد: النقاط في جهته اليسرى
+      var all = 0, dw = 0; for (var q = 0; q < t.length; q++) { var w = wt(t[q]); all += w; if (/[.\u2026\u00b7_]/.test(t[q])) dw += w; }
+      b = a + (b - a) * dw / (all || 1);
+    }
+    if (x0 === null) x0 = a; x1 = Math.max(x1 === null ? b : x1, b);
+    if (/[^.\u2026\u00b7_:\-\s]/.test(t)) break;
+  }
+  if (x0 !== null && x1 - x0 >= 14) return [x0, x1];
   return [c.x0 - 56, c.x0 - 6];
 }
 function overlaps(b, imgs) { return (imgs || []).some(function (m) { return Math.min(b.x + b.w, m[2]) - Math.max(b.x, m[0]) > 4 && Math.min(b.y + b.h, m[3]) - Math.max(b.y, m[1]) > 3; }); }
@@ -267,18 +278,25 @@ function detectPage(items, people, imgs) {
     /* (1) بطاقة توقيع: عبارة «التوقيع: ......» تحت الاسم أو بجواره */
     var lab = own || labels.filter(function (L) {
       if (usedLab.indexOf(L) >= 0) return false;
-      var below = c.yBot - L.cy >= 2 && c.yBot - L.cy <= 34 && Math.min(L.x1, c.x1 + 30) - Math.max(L.x0, c.x0 - 30) > 0;
+      var below = c.yBot - L.cy >= 2 && c.yBot - L.cy <= 40 && Math.min(L.x1, c.x1 + 8) - Math.max(L.x0, c.x0 - 8) > 0;
       var beside = Math.abs(L.cy - c.cy) <= 5 && L.x1 <= c.x0 + 6 && c.x0 - L.x1 <= 130;
       return below || beside;
-    }).sort(function (a, b) { return (Math.abs(a.cy - c.cy) + Math.abs(a.cx - c.cx) / 4) - (Math.abs(b.cy - c.cy) + Math.abs(b.cx - c.cx) / 4); })[0];
+    }).sort(function (a, b) { return (Math.abs(a.cy - c.cy) + Math.abs(a.cx - c.cx)) - (Math.abs(b.cy - c.cy) + Math.abs(b.cx - c.cx)); })[0];
     if (lab) {
-      var r = own ? dotsRegion({ parts: c.parts, x0: c.x0 }) : dotsRegion(lab), w = Math.min(60, Math.max(40, r[1] - r[0]));
-      box = { x: (r[0] + r[1]) / 2 - w / 2, y: lab.yBot - 2, w: w, h: Math.min(15, lab.h + 3) };   // فوق السطر المنقّط دون أن يغطي سطر الاسم if (!own) usedLab.push(lab);
+      var r = own ? dotsRegion({ parts: c.parts, x0: c.x0 }) : dotsRegion(lab), w;
+      w = Math.min(110, Math.max(50, r[1] - r[0])); var y0 = lab.yBot - lab.h * 0.35, hh = Math.max(16, Math.min(30, (own ? lab.h * 2 : c.yBot - y0 - 1)));
+      box = { x: (r[0] + r[1]) / 2 - w / 2, y: y0, w: w, h: hh };   // يملأ السطر المنقّط ويرتفع فوقه قليلًا if (!own) usedLab.push(lab);
     }
     /* (2) صف في جدول: ترويسة اسم فوق الخانة + عمود «التوقيع» في صف الترويسة نفسه */
     if (!box && above) {
       var sg = hdrS.filter(function (h) { return Math.abs(h.cy - above.cy) <= 26 && h.cx < c.x0 + 2; }).sort(function (a, b) { return b.cx - a.cx; })[0];
-      if (sg) box = { x: sg.cx - 23, y: c.cy - 8.5, w: 46, h: 17 };
+      if (sg) {
+        var row = cells.filter(function (h) { return h !== sg && h.lines === 1 && Math.abs(h.cy - sg.cy) <= 4; });
+        var ln = row.filter(function (h) { return h.x1 <= sg.x0; }).sort(function (a, b) { return b.x1 - a.x1; })[0], rn = row.filter(function (h) { return h.x0 >= sg.x1; }).sort(function (a, b) { return a.x0 - b.x0; })[0];
+        var half = Math.min(ln ? (sg.x0 - ln.x1) / 2 + (sg.x1 - sg.x0) / 2 : 60, rn ? (rn.x0 - sg.x1) / 2 + (sg.x1 - sg.x0) / 2 : 60);
+        var bw = Math.max(46, Math.min(100, half * 2 * 0.8)), bh = Math.max(16, Math.min(22, c.h * 1.5));
+        box = { x: sg.cx - bw / 2, y: c.cy - bh / 2, w: bw, h: bh };
+      }
     }
     if (box && overlaps(box, imgs)) DIAG.occ++;   // موضع فيه توقيع مصوَّر سابقًا: لا يُكرَّر
     if (!box || overlaps(box, imgs)) return;
@@ -330,10 +348,16 @@ function stampPdf(bytes, map, signs) {
   return P.PDFDocument.load(bytes).then(function (doc) {
     var pages = doc.getPages(), n = 0;
     Object.keys(map || {}).forEach(function (name) {
-      if (!signs[name]) return; var path; try { path = strokesPath(signs[name]); } catch (e) { return; }
+      if (!signs[name]) return; var st;
+      try { st = JSON.parse(signs[name]); } catch (e) { return; }
+      var mx = 1e9, my = 1e9, Mx = -1e9, My = -1e9;
+      st.forEach(function (s) { s.forEach(function (p) { mx = Math.min(mx, p[0]); my = Math.min(my, p[1]); Mx = Math.max(Mx, p[0]); My = Math.max(My, p[1]); }); });
+      if (mx > Mx) return; var bw = Math.max(Mx - mx, 20), bh = Math.max(My - my, 20);
+      var path = st.map(function (s) { return s.map(function (p, i) { return (i ? 'L' : 'M') + (p[0] - mx) + ' ' + (p[1] - my); }).join(' ') + (s.length === 1 ? ' l0.1 0' : ''); }).join(' ');
       map[name].forEach(function (b) {
-        var pg = pages[b[0] - 1]; if (!pg) return; var sc = Math.min(b[3] / 600, b[4] / 220);
-        pg.drawSvgPath(path, { x: b[1] + (b[3] - 600 * sc) / 2, y: b[2] + b[4] - (b[4] - 220 * sc) / 2, scale: sc, borderColor: P.rgb(0.04, 0.18, 0.69), borderWidth: 10, borderLineCap: P.LineCapStyle.Round });
+        var pg = pages[b[0] - 1]; if (!pg) return;
+        var sc = Math.min(b[3] / bw, b[4] / bh), w = bw * sc, h = bh * sc;
+        pg.drawSvgPath(path, { x: b[1] + (b[3] - w) / 2, y: b[2] + b[4] - (b[4] - h) / 2, scale: sc, borderColor: P.rgb(0.04, 0.18, 0.69), borderWidth: 1.2 / sc, borderLineCap: P.LineCapStyle.Round });
         n++;
       });
     });
