@@ -101,6 +101,16 @@ details ol{padding-right:18px;margin-top:4px;color:var(--mute);line-height:1.6}
   <div class="row"><button class="btn sec" id="svCancel">إلغاء</button><button class="btn del" id="svGo" style="background:#a1271b;color:#fff;border:0">حذف التواقيع المحددة</button></div>
 </div></div>
 
+<div class="ov" id="av"><div class="dlg" role="dialog" aria-modal="true">
+  <h3>إضافة أسماء وتخصصات</h3><p>اكتب الاسم واختر التخصص أو اكتب تخصصًا جديدًا. يمكن أيضًا لصق قائمة: كل سطر «الاسم - التخصص». الاسم الموجود مسبقًا يُحدَّث تخصصه فقط وتبقى تواقيعه.</p>
+  <div id="aRows" style="max-height:38vh;overflow:auto;margin-top:10px"></div>
+  <button class="btn sec" id="aMore" style="margin-top:6px">+ صف آخر</button>
+  <textarea id="aPaste" rows="4" placeholder="لصق قائمة (اختياري):&#10;محمد أحمد الزهراني - الرياضيات" style="width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:10px;margin-top:10px"></textarea>
+  <datalist id="aDepts"></datalist>
+  <div class="msg" id="avMsg"></div>
+  <div class="row"><button class="btn sec" id="avCancel">إلغاء</button><button class="btn" id="avGo">حفظ الأسماء</button></div>
+</div></div>
+
 <div class="ov" id="uv"><div class="dlg" role="dialog" aria-modal="true">
   <h3>إرفاق ملفات للتوقيع</h3>
   <label class="fl">طريقة التوقيع</label>
@@ -169,6 +179,8 @@ var Local = {
     return lsave().then(function () { return { signs: L.signs.slice(n), count: L.signs.length, files: L.files.slice(), fsigns: [], fcount: L.fsigns.length, removedIds: ids }; }); },
   removePeople: function (key, names) { LT = LT.filter(function (t) { return names.indexOf(t[0]) < 0; }); L.signs = L.signs.filter(function (g) { return names.indexOf(g.name) < 0; }); L.fsigns = L.fsigns.filter(function (g) { return names.indexOf(g.name) < 0; });
     return lsave().then(function () { var r = lsince(0, 0); r.reset = true; r.people = LT.map(function (t) { return { name: t[0], dept: t[1] }; }); return r; }); },
+  addPeople: function (key, list) { var a = 0, u = 0; list.forEach(function (x) { var t = LT.filter(function (y) { return y[0] === x[0]; })[0]; if (t) { if (t[1] !== x[1]) { t[1] = x[1]; u++; } } else { LT.push([x[0], x[1]]); a++; } });
+    return Promise.resolve({ people: LT.map(function (t) { return { name: t[0], dept: t[1] }; }), added: a, updated: u }); },
   removeSigns: function (key, names) { L.signs = L.signs.filter(function (g) { return names.indexOf(g.name) < 0; }); L.fsigns = L.fsigns.filter(function (g) { return names.indexOf(g.name) < 0; });
     return lsave().then(function () { var r = lsince(0, 0); r.reset = true; return r; }); },
   getFile: function (id) { return L.blobs[id] ? Promise.resolve(L.blobs[id]) : Promise.reject(new Error('الملف محفوظ على هذا الجهاز لهذه الجلسة فقط؛ أعد رفعه.')); }
@@ -441,7 +453,7 @@ function render() {
   var q = $('find').value.trim(), html = '', dept = null, list = listFor(f), done = doneOf(f);
   $('tabs').innerHTML = '<button class="tab' + (S.cur === 'u' ? ' on' : '') + '" data-id="u">الكشف الموحّد<b>' + doneOf(null) + '/' + S.people.length + '</b></button>' +
     S.files.map(function (x) { return '<button class="tab' + (S.cur === x.id ? ' on' : '') + '" data-id="' + esc(x.id) + '" title="' + esc(x.title) + '">' + esc(x.title) + '<b>' + doneOf(x) + '/' + listFor(x).length + '</b></button>'; }).join('') +
-    (S.admin ? '<button class="tab add" data-id="+">+ إرفاق ملفات</button>' + (S.files.length ? '<button class="tab add" data-id="-" style="color:#a1271b;border-color:#e3b3ad">حذف ملفات</button>' : '') + (Object.keys(S.signs).length ? '<button class="tab add" data-id="x" style="color:#a1271b;border-color:#e3b3ad">حذف تواقيع</button>' : '') + '<button class="tab add" data-id="p" style="color:#a1271b;border-color:#e3b3ad">حذف أسماء</button>' : '');
+    (S.admin ? '<button class="tab add" data-id="+">+ إرفاق ملفات</button>' + (S.files.length ? '<button class="tab add" data-id="-" style="color:#a1271b;border-color:#e3b3ad">حذف ملفات</button>' : '') + (Object.keys(S.signs).length ? '<button class="tab add" data-id="x" style="color:#a1271b;border-color:#e3b3ad">حذف تواقيع</button>' : '') + '<button class="tab add" data-id="a">+ إضافة أسماء</button><button class="tab add" data-id="p" style="color:#a1271b;border-color:#e3b3ad">حذف أسماء</button>' : '');
   list.forEach(function (r, k) {
     var g = signedIn(f, r.name), mine = S.signs[r.name], hide = q && r.name.indexOf(q) < 0;
     if (r.dept !== dept) { dept = r.dept; if (!q) html += '<tr class="dep"><td colspan="3">' + esc(dept) + '</td></tr>'; }
@@ -459,7 +471,7 @@ function render() {
   $('prog').style.width = (list.length ? Math.round(done * 100 / list.length) : 0) + '%';
 }
 $('find').oninput = render;
-$('tabs').onclick = function (e) { var b = e.target.closest('.tab'); if (!b) return; if (b.dataset.id === '+') return openUpload(); if (b.dataset.id === '-') return openBulk(); if (b.dataset.id === 'x') return openSignDel(); if (b.dataset.id === 'p') return openSignDel(true); S.cur = b.dataset.id; render(); window.scrollTo(0, 0); };
+$('tabs').onclick = function (e) { var b = e.target.closest('.tab'); if (!b) return; if (b.dataset.id === '+') return openUpload(); if (b.dataset.id === '-') return openBulk(); if (b.dataset.id === 'x') return openSignDel(); if (b.dataset.id === 'p') return openSignDel(true); if (b.dataset.id === 'a') return openAdd(); S.cur = b.dataset.id; render(); window.scrollTo(0, 0); };
 $('rows').onclick = function (e) { var b = e.target.closest('button.nm'); if (!b) return; var p = S.people.filter(function (x) { return x.name === b.dataset.n; })[0]; if (p) openPad(p); };
 $('fbar').onclick = function (e) {
   var f = curFile(); if (!f) return;
@@ -590,6 +602,28 @@ $('svGo').onclick = function () {
   b.disabled = true; b.textContent = 'جارٍ الحذف…'; m.className = 'msg';
   run(delPeople ? 'removePeople' : 'removeSigns', [ADMIN_KEY, names], function (r) { merge(r); $('sv').className = 'ov'; render(); stamp(); },
     function (msg) { b.disabled = false; b.textContent = delPeople ? 'حذف الأسماء المحددة' : 'حذف التواقيع المحددة'; m.textContent = /غير معروف/.test(msg) ? 'حدّث Code.gs وانشر إصدارًا جديدًا ثم أعد المحاولة.' : msg; m.className = 'msg on'; });
+};
+
+/* ---------- إضافة أسماء وتخصصات (المشرف) ---------- */
+var AIN = 'font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:10px';
+function aRow() { var d = document.createElement('div'); d.style.cssText = 'display:flex;gap:6px;margin-top:6px';
+  d.innerHTML = '<input class="aN" placeholder="الاسم الرباعي" style="flex:3;min-width:0;' + AIN + '"><input class="aD" list="aDepts" placeholder="التخصص" style="flex:2;min-width:0;' + AIN + '">'; $('aRows').appendChild(d); }
+function openAdd() { var ds = []; S.people.forEach(function (p) { if (p.dept && ds.indexOf(p.dept) < 0) ds.push(p.dept); });
+  $('aDepts').innerHTML = ds.map(function (d) { return '<option value="' + esc(d) + '">'; }).join('');
+  $('aRows').innerHTML = ''; aRow(); aRow(); aRow(); $('aPaste').value = ''; $('avMsg').className = 'msg'; $('avGo').disabled = false; $('avGo').textContent = 'حفظ الأسماء'; $('av').className = 'ov on'; }
+$('aMore').onclick = aRow;
+$('avCancel').onclick = function () { $('av').className = 'ov'; };
+$('av').onclick = function (e) { if (e.target === this) this.className = 'ov'; };
+$('avGo').onclick = function () {
+  var list = [], m = $('avMsg'), b = this, clean = function (x) { return String(x || '').replace(/\s+/g, ' ').trim(); };
+  [].forEach.call(document.querySelectorAll('#aRows > div'), function (r) { var n = clean(r.querySelector('.aN').value), d = clean(r.querySelector('.aD').value); if (n) list.push([n, d]); });
+  $('aPaste').value.split(/\r?\n/).forEach(function (l) { l = clean(l); if (!l) return; var p = l.split(/\s*[-–—\t|،,]\s*/); list.push([clean(p[0]), clean(p.slice(1).join(' '))]); });
+  list = list.filter(function (x) { return x[0].split(' ').length >= 2; });
+  if (!list.length) { m.textContent = 'اكتب اسمًا واحدًا على الأقل (اسمان فأكثر).'; m.className = 'msg on'; return; }
+  if (list.some(function (x) { return !x[1]; })) { m.textContent = 'حدّد التخصص لكل اسم.'; m.className = 'msg on'; return; }
+  b.disabled = true; b.textContent = 'جارٍ الحفظ…'; m.className = 'msg';
+  run('addPeople', [ADMIN_KEY, list], function (r) { merge(r); $('av').className = 'ov'; render(); stamp(); alert('أُضيف ' + (r.added || 0) + ' وحُدِّث تخصص ' + (r.updated || 0) + '.'); },
+    function (msg) { b.disabled = false; b.textContent = 'حفظ الأسماء'; m.textContent = /غير معروف/.test(msg) ? 'حدّث Code.gs وانشر إصدارًا جديدًا ثم أعد المحاولة.' : msg; m.className = 'msg on'; });
 };
 
 /* ---------- إرفاق الملفات (المشرف) ---------- */
